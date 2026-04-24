@@ -52,3 +52,23 @@ AR_x86_64_pc_windows_gnu=/opt/homebrew/bin/x86_64-w64-mingw32-ar \
 CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=/opt/homebrew/bin/x86_64-w64-mingw32-gcc \
 npx tauri build --target x86_64-pc-windows-gnu
 ```
+
+## GitHub 自动打包
+
+仓库已经预留 GitHub Actions 自动发布流程，文件在 `.github/workflows/release.yml`。
+
+- 正常发布：推送版本 tag 后会自动构建 macOS 和 Windows 安装包，并上传到对应 GitHub Release
+- 补发已有 tag：在 GitHub 的 `Actions -> Release Desktop App -> Run workflow` 中填入 `tag_name`，例如 `0.1`
+
+建议发布方式：
+
+```bash
+git tag 0.1.1
+git push origin main
+git push origin 0.1.1
+```
+
+说明：
+
+- 当前 workflow 使用 GitHub 自带的 `GITHUB_TOKEN` 创建或更新 Release
+- 目前未配置 macOS 签名、公证和 Windows 代码签名，因此安装时仍可能看到系统安全提示
