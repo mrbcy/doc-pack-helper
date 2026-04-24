@@ -73,3 +73,4 @@ git push origin 0.1.1
 - 当前 workflow 使用 GitHub 自带的 `GITHUB_TOKEN` 创建或更新 Release
 - 目前未配置 macOS 签名、公证和 Windows 代码签名，因此安装时仍可能看到系统安全提示
 - Windows 正式发布请优先使用 GitHub Actions 生成的安装包；macOS 上交叉编译得到的 `x86_64-pc-windows-gnu` 版本可能出现快捷方式或任务栏图标异常
+- GitHub Actions 中的 Windows 自动发布当前只构建 NSIS `setup.exe`，不走 WiX MSI，主要是为了避开 `light.exe` / VBSCRIPT 这一类不稳定因素
