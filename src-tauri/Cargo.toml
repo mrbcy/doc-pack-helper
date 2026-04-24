@@ -1,17 +1,17 @@
 [package]
-name = "app"
+name = "doc-pack-helper"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Desktop helper for managing and exporting application materials."
+authors = ["mrbcy"]
 license = ""
-repository = ""
+repository = "https://github.com/mrbcy/doc-pack-helper"
 edition = "2021"
 rust-version = "1.77.2"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "app_lib"
+name = "doc_pack_helper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
