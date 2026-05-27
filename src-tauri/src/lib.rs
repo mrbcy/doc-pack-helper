@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -103,12 +103,19 @@ struct LlmMaterialCatalogItem {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LlmExtractItem {
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     required_material: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     matched_material_id: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     matched_material_name: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     suggested_filename: String,
+    #[serde(default, deserialize_with = "deserialize_f64_or_default")]
     confidence: f64,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     status: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     reason: String,
 }
 
@@ -118,11 +125,45 @@ struct LlmExtractResponse {
     items: Vec<LlmExtractItem>,
 }
 
+fn deserialize_string_or_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Bool(flag)) => flag.to_string(),
+        _ => String::new(),
+    })
+}
+
+fn deserialize_f64_or_default<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Number(number)) => number.as_f64().unwrap_or(0.0),
+        Some(Value::String(text)) => text.trim().parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    })
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct ImportScanFile {
     id: String,
     path: String,
+    relative_path: String,
+    filename: String,
+    extension: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ImportPromptFileRef {
+    id: String,
     relative_path: String,
     filename: String,
     extension: String,
@@ -430,7 +471,7 @@ items 中每一项都包含以下字段：\n\
 \n\
 材料库：\n{}",
         requirement_text.trim(),
-        serde_json::to_string_pretty(&materials).map_err(|error| error.to_string())?
+        serde_json::to_string(&materials).map_err(|error| error.to_string())?
     );
 
     let result = async {
@@ -480,6 +521,7 @@ async fn suggest_material_imports_with_llm(
     let cancel_flag = register_request(&requests, &request_id)?;
 
     let category_hints = load_material_categories(&conn)?;
+    let prompt_files = build_import_prompt_files(&files);
     let system_prompt = "你是材料整理助手。请根据文件名、相对路径、目录结构，将文件智能归类为可导入的材料。必须只返回 JSON，不要返回 Markdown、解释文字或代码块。";
     let user_prompt = format!(
         "请分析下面目录中的文件，并输出 JSON 对象，格式固定为 {{\"items\":[...]}}。\n\
@@ -501,9 +543,9 @@ async fn suggest_material_imports_with_llm(
 扫描目录：\n{}\n\
 \n\
 文件列表：\n{}",
-        serde_json::to_string_pretty(&category_hints).map_err(|error| error.to_string())?,
+        serde_json::to_string(&category_hints).map_err(|error| error.to_string())?,
         root_dir.trim(),
-        serde_json::to_string_pretty(&files).map_err(|error| error.to_string())?
+        serde_json::to_string(&prompt_files).map_err(|error| error.to_string())?
     );
 
     let result = async {
@@ -534,8 +576,13 @@ async fn finalize_material_import_suggestions_with_llm(
     let cancel_flag = register_request(&requests, &request_id)?;
 
     let category_hints = load_material_categories(&conn)?;
+    let referenced_file_ids: HashSet<&str> = suggestions
+        .iter()
+        .flat_map(|item| item.file_ids.iter().map(String::as_str))
+        .collect();
     let file_refs: Vec<Value> = files
         .iter()
+        .filter(|file| referenced_file_ids.contains(file.id.as_str()))
         .map(|file| {
             json!({
                 "id": file.id,
@@ -575,9 +622,9 @@ async fn finalize_material_import_suggestions_with_llm(
 文件索引：\n{}\n\
 \n\
 第一轮归类结果：\n{}",
-        serde_json::to_string_pretty(&category_hints).map_err(|error| error.to_string())?,
-        serde_json::to_string_pretty(&file_refs).map_err(|error| error.to_string())?,
-        serde_json::to_string_pretty(&suggestion_refs).map_err(|error| error.to_string())?
+        serde_json::to_string(&category_hints).map_err(|error| error.to_string())?,
+        serde_json::to_string(&file_refs).map_err(|error| error.to_string())?,
+        serde_json::to_string(&suggestion_refs).map_err(|error| error.to_string())?
     );
 
     let result = async {
@@ -923,7 +970,7 @@ async fn send_llm_request(
     });
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(45))
+        .timeout(Duration::from_secs(120))
         .build()
         .map_err(|error| format!("创建 LLM 客户端失败：{}", error))?;
 
@@ -1207,6 +1254,18 @@ fn should_skip_extension(ext: &str) -> bool {
     matches!(ext, "db" | "tmp" | "temp")
 }
 
+fn build_import_prompt_files(files: &[ImportScanFile]) -> Vec<ImportPromptFileRef> {
+    files
+        .iter()
+        .map(|file| ImportPromptFileRef {
+            id: file.id.clone(),
+            relative_path: file.relative_path.clone(),
+            filename: file.filename.clone(),
+            extension: file.extension.clone(),
+        })
+        .collect()
+}
+
 fn normalize_import_suggestions(
     items: Vec<LlmImportSuggestion>,
     files: &[ImportScanFile],
@@ -1303,4 +1362,32 @@ fn infer_category_from_path(
         return Some("证明材料".to_string());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_llm_extract_response_accepts_null_string_fields() {
+        let content = r#"{
+            "items": [
+                {
+                    "requiredMaterial": "身份证",
+                    "matchedMaterialId": null,
+                    "matchedMaterialName": null,
+                    "suggestedFilename": "身份证.pdf",
+                    "confidence": 0,
+                    "status": "missing",
+                    "reason": "未匹配"
+                }
+            ]
+        }"#;
+
+        let parsed = parse_llm_extract_response(content).expect("response should parse");
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].required_material, "身份证");
+        assert_eq!(parsed.items[0].matched_material_id, "");
+        assert_eq!(parsed.items[0].matched_material_name, "");
+    }
 }

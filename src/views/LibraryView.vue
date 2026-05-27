@@ -307,7 +307,8 @@ const CATEGORY_MAP = {
   学历学位: '学历学位',
 };
 
-const IMPORT_BATCH_SIZE = 10;
+const IMPORT_BATCH_MAX_FILES = 24;
+const IMPORT_BATCH_MAX_CHARS = 12000;
 
 export default {
   name: 'LibraryView',
@@ -512,7 +513,7 @@ export default {
 
       try {
         this.progressVisible = true;
-        const batches = this.chunkFiles(this.scannedFiles, IMPORT_BATCH_SIZE);
+        const batches = this.chunkFiles(this.scannedFiles);
         let batchSuggestions = [];
 
         for (let index = 0; index < batches.length; index += 1) {
@@ -530,7 +531,7 @@ export default {
           );
         }
 
-        if (batchSuggestions.length > 1) {
+        if (batches.length > 1 && batchSuggestions.length > 1) {
           this.currentRequestId = `llm-import-finalize-${Date.now()}-${Math.random().toString(16).slice(2)}`;
           this.progressTitle = '正在整理全局结果';
           this.progressText = '正在把多批次结果统一命名和归类，避免跨批次错位。';
@@ -556,12 +557,45 @@ export default {
         this.currentRequestId = '';
       }
     },
-    chunkFiles(files, batchSize) {
+    chunkFiles(files) {
+      const sorted = [...files].sort((left, right) => {
+        const leftDir = this.parentDir(left.relativePath);
+        const rightDir = this.parentDir(right.relativePath);
+        return leftDir.localeCompare(rightDir) || left.relativePath.localeCompare(right.relativePath);
+      });
       const result = [];
-      for (let index = 0; index < files.length; index += batchSize) {
-        result.push(files.slice(index, index + batchSize));
+      let current = [];
+      let currentChars = 0;
+
+      sorted.forEach((file) => {
+        const nextChars = currentChars + this.estimateImportPromptSize(file);
+        if (current.length && (current.length >= IMPORT_BATCH_MAX_FILES || nextChars > IMPORT_BATCH_MAX_CHARS)) {
+          result.push(current);
+          current = [];
+          currentChars = 0;
+        }
+        current.push(file);
+        currentChars += this.estimateImportPromptSize(file);
+      });
+
+      if (current.length) {
+        result.push(current);
       }
+
       return result;
+    },
+    estimateImportPromptSize(file) {
+      return JSON.stringify({
+        id: file.id,
+        relativePath: file.relativePath,
+        filename: file.filename,
+        extension: file.extension,
+      }).length;
+    },
+    parentDir(relativePath) {
+      const normalized = String(relativePath || '').replace(/\\/g, '/');
+      const index = normalized.lastIndexOf('/');
+      return index >= 0 ? normalized.slice(0, index) : '';
     },
     async confirmImportSuggestions() {
       if (!this.selectedImportSuggestions.length) {
