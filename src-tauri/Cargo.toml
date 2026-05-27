@@ -1,6 +1,6 @@
 [package]
 name = "doc-pack-helper"
-version = "0.1.4"
+version = "0.1.5"
 description = "Desktop helper for managing and exporting application materials."
 authors = ["mrbcy"]
 license = ""
